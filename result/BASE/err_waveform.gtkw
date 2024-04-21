@@ -1,0 +1,73 @@
+[*]
+[*] GTKWave Analyzer v3.3.103 (w)1999-2019 BSI
+[*] Sun Apr 21 18:28:54 2024
+[*]
+[dumpfile] "/home/user/Desktop/LAB_ARCH/scr1_lab3/result/BASE/simx.vcd"
+[dumpfile_mtime] "Mon Apr  8 00:00:20 2024"
+[dumpfile_size] 44362165
+[savefile] "/home/user/Desktop/LAB_ARCH/scr1_lab3/result/BASE/err_waveform.gtkw"
+[timestart] 192947
+[size] 1206 1252
+[pos] -1 -1
+*-4.000000 192942 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+[treeopen] scr1_top_tb_ahb.
+[treeopen] scr1_top_tb_ahb.i_top.
+[treeopen] scr1_top_tb_ahb.i_top.i_core_top.
+[treeopen] scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.
+[sst_width] 233
+[signals_width] 206
+[sst_expanded] 1
+[sst_vpaned_height] 371
+@28
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.clk
+@200
+-IMEM_INTERFACE
+@22
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.ifu2imem_addr_o[31:0]
+@28
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.imem_handshake_done
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.imem2ifu_resp_i[1:0]
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.imem_resp_er
+@22
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.imem2ifu_rdata_i[31:0]
+@200
+-QUEUE
+@28
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.instr_hi_is_rvi
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.instr_hi_rvi_lo_ff
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.q_has_1_ocpd_hw
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.q_head_is_rvi
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.q_is_empty
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.q_err_head
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.q_err_next
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.q_is_empty
+@200
+-IFU<->IDU
+@28
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.instr_bypass_vd
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.ifu2idu_imem_err_o
+@22
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.ifu2idu_instr_o[31:0]
+@28
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.ifu2idu_vd_o
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.idu2ifu_rdy_i
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.ifu2idu_err_rvi_hi_o
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_ifu.q_flush_req
+@200
+-EXU
+@22
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_exu.exc_code[3:0]
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_exu.pc_curr_ff[31:0]
+@28
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_exu.instr_fault_rvi_hi
+@22
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_exu.exc_trap_val[31:0]
+@28
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_exu.exu_exc_req
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_exu.exu2csr_take_exc_o
+@200
+-CSR
+@22
+scr1_top_tb_ahb.i_top.i_core_top.i_pipe_top.i_pipe_csr.csr_mtval_ff[31:0]
+[pattern_trace] 1
+[pattern_trace] 0
