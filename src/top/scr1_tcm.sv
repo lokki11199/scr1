@@ -49,14 +49,17 @@ logic [1:0]                         dmem_rdata_shift_reg;
 //-------------------------------------------------------------------------------
 // Core interface
 //-------------------------------------------------------------------------------
-assign imem_req_en = (imem_resp == SCR1_MEM_RESP_RDY_OK) ^ imem_req;
+assign imem_req_en = (imem_resp == SCR1_MEM_RESP_RDY_OK | imem_resp == SCR1_MEM_RESP_RDY_ER) ^ imem_req;
 assign dmem_req_en = (dmem_resp == SCR1_MEM_RESP_RDY_OK) ^ dmem_req;
 
 always_ff @(posedge clk, negedge rst_n) begin
     if (~rst_n) begin
         imem_resp <= SCR1_MEM_RESP_NOTRDY;
     end else if (imem_req_en) begin
-        imem_resp <= imem_req ? SCR1_MEM_RESP_RDY_OK : SCR1_MEM_RESP_NOTRDY;
+        if(imem_addr == `SCR1_IMEM_AWIDTH'(32'h48117c))
+            imem_resp <= imem_req ? SCR1_MEM_RESP_RDY_ER : SCR1_MEM_RESP_NOTRDY; 
+        else
+            imem_resp <= imem_req ? SCR1_MEM_RESP_RDY_OK : SCR1_MEM_RESP_NOTRDY;
     end
 end
 
