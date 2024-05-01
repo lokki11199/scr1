@@ -139,6 +139,10 @@ logic [`SCR1_IMEM_DWIDTH-1:0]               ifu2idu_instr;          // IFU instr
 logic                                       ifu2idu_imem_err;       // IFU instruction access fault
 logic                                       ifu2idu_err_rvi_hi;     // 1 - imem fault when trying to fetch second half of an unaligned RVI instruction
 logic                                       idu2ifu_rdy;            // IDU ready for new data
+`ifdef BPU
+logic                                       ifu2idu_prediction;
+logic [`SCR1_XLEN-1:0]                      ifu2idu_predicted_pc;
+`endif
 
 // IDU <-> EXU
 logic                                       idu2exu_req;            // IDU request
@@ -150,6 +154,21 @@ logic                                       idu2exu_use_rd;         // Instructi
 logic                                       idu2exu_use_imm;        // Instruction uses immediate
 `endif // SCR1_NO_EXE_STAGE
 logic                                       exu2idu_rdy;            // EXU ready for new data
+`ifdef BPU
+logic                                       idu2exu_prediction;
+logic [`SCR1_XLEN-1:0]                      idu2exu_predicted_pc;
+`endif
+
+// EXU <-> IFU
+`ifdef BPU
+logic                                       exu2ifu_b_type;          // B-type instr flag
+logic                                       exu2ifu_prev_prediction; // Previous prediction
+logic [`SCR1_XLEN-1:0]                      exu2ifu_pc_prev;         // Previous PC
+logic                                       exu2ifu_btb_miss;
+`ifdef SCR1_RVC_EXT
+logic                                       exu2ifu_rvi_flag;
+`endif
+`endif
 
 // EXU <-> MPRF
 logic [`SCR1_MPRF_AWIDTH-1:0]               exu2mprf_rs1_addr;      // MPRF rs1 read address
@@ -298,40 +317,55 @@ assign pipe2dm_pc_sample_o = curr_pc;
 // Instruction fetch unit
 //-------------------------------------------------------------------------------
 scr1_pipe_ifu i_pipe_ifu (
-    .rst_n                    (pipe_rst_n         ),
-    .clk                      (clk                ),
+    .rst_n                     (pipe_rst_n         ),
+    .clk                       (clk                ),
 
     // Instruction memory interface
-    .imem2ifu_req_ack_i       (imem2pipe_req_ack_i),
-    .ifu2imem_req_o           (pipe2imem_req_o    ),
-    .ifu2imem_cmd_o           (pipe2imem_cmd_o    ),
-    .ifu2imem_addr_o          (pipe2imem_addr_o   ),
-    .imem2ifu_rdata_i         (imem2pipe_rdata_i  ),
-    .imem2ifu_resp_i          (imem2pipe_resp_i   ),
+    .imem2ifu_req_ack_i        (imem2pipe_req_ack_i),
+    .ifu2imem_req_o            (pipe2imem_req_o    ),
+    .ifu2imem_cmd_o            (pipe2imem_cmd_o    ),
+    .ifu2imem_addr_o           (pipe2imem_addr_o   ),
+    .imem2ifu_rdata_i          (imem2pipe_rdata_i  ),
+    .imem2ifu_resp_i           (imem2pipe_resp_i   ),
 
     // New PC interface
-    .exu2ifu_pc_new_req_i     (new_pc_req         ),
-    .exu2ifu_pc_new_i         (new_pc             ),
-    .pipe2ifu_stop_fetch_i    (stop_fetch         ),
+    .exu2ifu_pc_new_req_i      (new_pc_req         ),
+    .exu2ifu_pc_new_i          (new_pc             ),
+    .pipe2ifu_stop_fetch_i     (stop_fetch         ),
+
+`ifdef BPU
+    // IFU <-> EXU BPU interface 
+    .exu2ifu_b_type_i          (exu2ifu_b_type),
+    .exu2ifu_prev_prediction_i (exu2ifu_prev_prediction),
+    .exu2ifu_pc_prev_i         (exu2ifu_pc_prev),
+    .exu2ifu_btb_miss_i        (exu2ifu_btb_miss),
+    `ifdef SCR1_RVC_EXT
+    .exu2ifu_rvi_flag_i        (exu2ifu_rvi_flag),
+    `endif //SCR1_RVC_EXT
+`endif
 
 `ifdef SCR1_DBG_EN
     // IFU <-> HDU Program Buffer interface
-    .hdu2ifu_pbuf_fetch_i     (fetch_pbuf         ),
-    .ifu2hdu_pbuf_rdy_o       (ifu2hdu_pbuf_rdy   ),
-    .hdu2ifu_pbuf_vd_i        (hdu2ifu_pbuf_vd    ),
-    .hdu2ifu_pbuf_err_i       (hdu2ifu_pbuf_err   ),
-    .hdu2ifu_pbuf_instr_i     (hdu2ifu_pbuf_instr ),
+    .hdu2ifu_pbuf_fetch_i      (fetch_pbuf         ),
+    .ifu2hdu_pbuf_rdy_o        (ifu2hdu_pbuf_rdy   ),
+    .hdu2ifu_pbuf_vd_i         (hdu2ifu_pbuf_vd    ),
+    .hdu2ifu_pbuf_err_i        (hdu2ifu_pbuf_err   ),
+    .hdu2ifu_pbuf_instr_i      (hdu2ifu_pbuf_instr ),
 `endif // SCR1_DBG_EN
 `ifdef SCR1_CLKCTRL_EN
-    .ifu2pipe_imem_txns_pnd_o (imem_txns_pending  ),
+    .ifu2pipe_imem_txns_pnd_o  (imem_txns_pending  ),
 `endif // SCR1_CLKCTRL_EN
 
     // IFU <-> IDU interface
-    .idu2ifu_rdy_i            (idu2ifu_rdy        ),
-    .ifu2idu_instr_o          (ifu2idu_instr      ),
-    .ifu2idu_imem_err_o       (ifu2idu_imem_err   ),
-    .ifu2idu_err_rvi_hi_o     (ifu2idu_err_rvi_hi ),
-    .ifu2idu_vd_o             (ifu2idu_vd         )
+`ifdef BPU
+    .ifu2idu_prediction_o      (ifu2idu_prediction),
+    .ifu2idu_predicted_pc_o    (ifu2idu_predicted_pc),
+`endif
+    .idu2ifu_rdy_i             (idu2ifu_rdy        ),
+    .ifu2idu_instr_o           (ifu2idu_instr      ),
+    .ifu2idu_imem_err_o        (ifu2idu_imem_err   ),
+    .ifu2idu_err_rvi_hi_o      (ifu2idu_err_rvi_hi ),
+    .ifu2idu_vd_o              (ifu2idu_vd         )
 );
 
 //-------------------------------------------------------------------------------
@@ -352,6 +386,14 @@ scr1_pipe_idu i_pipe_idu (
     .idu2exu_cmd_o          (idu2exu_cmd       ),
     .idu2exu_use_rs1_o      (idu2exu_use_rs1   ),
     .idu2exu_use_rs2_o      (idu2exu_use_rs2   ),
+
+`ifdef BPU
+    .ifu2idu_prediction_i   (ifu2idu_prediction),
+    .ifu2idu_predicted_pc_i (ifu2idu_predicted_pc),
+    .idu2exu_prediction_o   (idu2exu_prediction),
+    .idu2exu_predicted_pc_o (idu2exu_predicted_pc),
+`endif
+
 `ifndef SCR1_NO_EXE_STAGE
     .idu2exu_use_rd_o       (idu2exu_use_rd    ),
     .idu2exu_use_imm_o      (idu2exu_use_imm   ),
@@ -376,6 +418,10 @@ scr1_pipe_exu i_pipe_exu (
     .idu2exu_cmd_i                  (idu2exu_cmd             ),
     .idu2exu_use_rs1_i              (idu2exu_use_rs1         ),
     .idu2exu_use_rs2_i              (idu2exu_use_rs2         ),
+`ifdef BPU
+    .idu2exu_prediction_i           (idu2exu_prediction),
+    .idu2exu_predicted_pc_i         (idu2exu_predicted_pc),
+`endif
 `ifndef SCR1_NO_EXE_STAGE
     .idu2exu_use_rd_i               (idu2exu_use_rd          ),
     .idu2exu_use_imm_i              (idu2exu_use_imm         ),
@@ -467,6 +513,15 @@ scr1_pipe_exu i_pipe_exu (
 `endif // SCR1_CLKCTRL_EN
     .exu2pipe_pc_curr_o             (curr_pc                 ),
     .exu2csr_pc_next_o              (next_pc                 ),
+`ifdef BPU
+    .exu2ifu_b_type_o               (exu2ifu_b_type),
+    .exu2ifu_prev_prediction_o      (exu2ifu_prev_prediction),
+    .exu2ifu_pc_prev_o              (exu2ifu_pc_prev),
+    .exu2ifu_btb_miss_o             (exu2ifu_btb_miss),
+    `ifdef SCR1_RVC_EXT
+    .exu2ifu_rvi_flag_o             (exu2ifu_rvi_flag),
+    `endif //SCR1_RVC_EXT
+`endif
     .exu2ifu_pc_new_req_o           (new_pc_req              ),
     .exu2ifu_pc_new_o               (new_pc                  )
 );
