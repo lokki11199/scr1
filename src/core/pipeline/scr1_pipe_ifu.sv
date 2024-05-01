@@ -29,7 +29,6 @@
 `ifdef SCR1_DBG_EN
 `include "scr1_hdu.svh"
 `endif // SCR1_DBG_EN
-
 module scr1_pipe_ifu
 (
     // Control signals
@@ -49,6 +48,13 @@ module scr1_pipe_ifu
     input   logic                                   exu2ifu_pc_new_req_i,       // New PC request (jumps, branches, traps etc)
     input   logic [`SCR1_XLEN-1:0]                  exu2ifu_pc_new_i,           // New PC
 
+`ifdef BPU
+    input   logic                                   exu2ifu_b_type_i,           // B-type instr flag
+    input   logic                                   exu2ifu_prev_prediction_i,  // Previous prediction
+    input   logic [`SCR1_XLEN-1:0]                  exu2ifu_pc_prev_i,          // Previous PC
+    input   logic                                   exu2ifu_btb_miss_i,         // BTB miss flag
+`endif
+
 `ifdef SCR1_DBG_EN
     // IFU <-> HDU Program Buffer interface
     input   logic                                   hdu2ifu_pbuf_fetch_i,       // Fetch instructions provided by Program Buffer
@@ -63,6 +69,10 @@ module scr1_pipe_ifu
 `endif // SCR1_CLKCTRL_EN
 
     // IFU <-> IDU interface
+`ifdef BPU
+    output  logic                                   ifu2idu_prediction_o,
+    output  logic [`SCR1_XLEN-1:0]                  ifu2idu_predicted_pc_o,
+`endif
     input   logic                                   idu2ifu_rdy_i,              // IDU ready for new data
     output  logic [`SCR1_IMEM_DWIDTH-1:0]           ifu2idu_instr_o,            // IFU instruction
     output  logic                                   ifu2idu_imem_err_o,         // Instruction access fault exception
@@ -74,15 +84,15 @@ module scr1_pipe_ifu
 // Local parameters declaration
 //------------------------------------------------------------------------------
 
-localparam SCR1_IFU_Q_SIZE_WORD     = 2;
-localparam SCR1_IFU_Q_SIZE_HALF     = SCR1_IFU_Q_SIZE_WORD * 2;
+localparam SCR1_IFU_Q_SIZE_WORD     = 2; //2 ����� ������
+localparam SCR1_IFU_Q_SIZE_HALF     = SCR1_IFU_Q_SIZE_WORD * 2; //4 ���������
 localparam SCR1_TXN_CNT_W           = 3;
 
-localparam SCR1_IFU_QUEUE_ADR_W     = $clog2(SCR1_IFU_Q_SIZE_HALF);
-localparam SCR1_IFU_QUEUE_PTR_W     = SCR1_IFU_QUEUE_ADR_W + 1;
+localparam SCR1_IFU_QUEUE_ADR_W     = $clog2(SCR1_IFU_Q_SIZE_HALF); //2 ���� �� �������� ������
+localparam SCR1_IFU_QUEUE_PTR_W     = SCR1_IFU_QUEUE_ADR_W + 1; //3 ���� �� �������� ���������
 
-localparam SCR1_IFU_Q_FREE_H_W      = $clog2(SCR1_IFU_Q_SIZE_HALF + 1);
-localparam SCR1_IFU_Q_FREE_W_W      = $clog2(SCR1_IFU_Q_SIZE_WORD + 1);
+localparam SCR1_IFU_Q_FREE_H_W      = $clog2(SCR1_IFU_Q_SIZE_HALF + 1); //3
+localparam SCR1_IFU_Q_FREE_W_W      = $clog2(SCR1_IFU_Q_SIZE_WORD + 1); //2
 
 //------------------------------------------------------------------------------
 // Local types declaration
@@ -158,11 +168,11 @@ logic                               q_wr_none;
 logic                               q_wr_full;
 
 // Write/read pointer registers
-logic [SCR1_IFU_QUEUE_PTR_W-1:0]    q_rptr;
-logic [SCR1_IFU_QUEUE_PTR_W-1:0]    q_rptr_next;
-logic                               q_rptr_upd;
-logic [SCR1_IFU_QUEUE_PTR_W-1:0]    q_wptr;
-logic [SCR1_IFU_QUEUE_PTR_W-1:0]    q_wptr_next;
+logic [SCR1_IFU_QUEUE_PTR_W-1:0]    q_rptr; //3 ����
+logic [SCR1_IFU_QUEUE_PTR_W-1:0]    q_rptr_next; //3 ����
+logic                               q_rptr_upd; 
+logic [SCR1_IFU_QUEUE_PTR_W-1:0]    q_wptr; //3 ����
+logic [SCR1_IFU_QUEUE_PTR_W-1:0]    q_wptr_next;//3 ����
 logic                               q_wptr_upd;
 
 // Instruction queue control signals
@@ -204,8 +214,8 @@ logic                               ifu_fsm_fetch;
 //------------------------------------------------------------------------------
 
 // IMEM response signals
-logic                               imem_resp_ok;
-logic                               imem_resp_er;
+logic                               imem_resp_ok; //������ - ��
+logic                               imem_resp_er; // ������ - ������
 logic                               imem_resp_er_discard_pnd;
 logic                               imem_resp_discard_req;
 logic                               imem_resp_received;
@@ -242,6 +252,74 @@ type_scr1_bypass_e                  instr_bypass_type;
 logic                               instr_bypass_vd;
 `endif // SCR1_NO_DEC_STAGE
 
+`ifdef BPU
+//------------------------------------------------------------------------------
+// Branch Prediction
+//------------------------------------------------------------------------------
+// IFU <-> BPU interface
+logic [`SCR1_XLEN-1:0]                   ifu2bpu_pc_o;               // BPU PC input
+logic                                    bpu2ifu_prediction_i;       //Prediction from BPU
+logic [`SCR1_XLEN-1:0]                   bpu2ifu_new_pc_i;           //New PC from BPU
+logic [`SCR1_XLEN-1:0]                   bpu_pc_ff;
+logic [`SCR1_XLEN-1:0]                   bpu_pc_next;
+logic                                    bpu_pc_update;
+
+BPU bp(.clk(clk),
+       .rst_n(rst_n),
+       .ifu2bpu_pc_i(ifu2bpu_pc_o),
+       .ifu2bpu_pc_new_req_i(exu2ifu_pc_new_req_i),
+       .ifu2bpu_pc_new_i(exu2ifu_pc_new_i),
+       .ifu2bpu_b_type_i(exu2ifu_b_type_i),
+       .ifu2bpu_prev_prediction_i(exu2ifu_prev_prediction_i),
+       .ifu2bpu_pc_prev_i(exu2ifu_pc_prev_i),
+       .ifu2bpu_btb_miss_i(exu2ifu_btb_miss_i),
+       .bpu2ifu_prediction_o(bpu2ifu_prediction_i),
+       .bpu2ifu_new_pc_o(bpu2ifu_new_pc_i));
+
+// BPU PC register
+//------------------------------------------------------------------------------
+
+assign bpu_pc_update = (ifu2idu_vd_o & idu2ifu_rdy_i) | exu2ifu_pc_new_req_i;                                                           
+
+always_ff @(posedge clk, negedge rst_n) begin
+    if (~rst_n) begin
+        bpu_pc_ff <= '0;
+    end else if (bpu_pc_update) begin
+        bpu_pc_ff <= bpu_pc_next;
+    end
+end
+assign ifu2bpu_pc_o = bpu_pc_next;
+always_comb 
+    if(bpu_pc_update)
+    begin
+        if(exu2ifu_pc_new_req_i)
+            bpu_pc_next = exu2ifu_pc_new_i;
+        else if(bpu2ifu_prediction_i)
+            bpu_pc_next = bpu2ifu_new_pc_i;
+        else
+            begin
+        `ifdef SCR1_NO_DEC_STAGE
+            case(instr_bypass_type)
+            SCR1_BYPASS_RVC            : bpu_pc_next = {bpu_pc_ff[`SCR1_XLEN-1:0] + 2'b10};
+            SCR1_BYPASS_RVI_RDATA,
+            SCR1_BYPASS_RVI_RDATA_QUEUE: bpu_pc_next = {bpu_pc_ff[`SCR1_XLEN-1:0] + 3'b100};
+            SCR1_BYPASS_NONE           : bpu_pc_next = q_head_is_rvc
+                                                   ? {bpu_pc_ff[`SCR1_XLEN-1:0] + 2'b10}
+                                                   : {bpu_pc_ff[`SCR1_XLEN-1:0] + 3'b100};
+            default                    : bpu_pc_next = bpu_pc_ff;
+            endcase
+        `else
+            bpu_pc_next = q_head_is_rvc ? {bpu_pc_ff[`SCR1_XLEN-1:0] + 2'b10}
+                                        : {bpu_pc_ff[`SCR1_XLEN-1:0] + 3'b100};
+        `endif
+            end
+    end
+    else
+        bpu_pc_next = bpu_pc_ff;
+
+assign ifu2idu_prediction_o = bpu2ifu_prediction_i;
+assign ifu2idu_predicted_pc_o = bpu2ifu_new_pc_i;
+`endif
 //------------------------------------------------------------------------------
 // Instruction queue
 //------------------------------------------------------------------------------
@@ -259,8 +337,8 @@ logic                               instr_bypass_vd;
 // New PC unaligned flag register
 //------------------------------------------------------------------------------
 
-assign new_pc_unaligned_upd = exu2ifu_pc_new_req_i | imem_resp_vd;
-
+assign new_pc_unaligned_upd = exu2ifu_pc_new_req_i | imem_resp_vd `ifdef BPU | (bpu2ifu_prediction_i & ifu2idu_vd_o & idu2ifu_rdy_i) `endif; //1 ���� ������ ������ ��(���������) � �������� ����������
+                                                                    //������� �� ����� ���������
 always_ff @(posedge clk, negedge rst_n) begin
     if (~rst_n) begin
         new_pc_unaligned_ff <= 1'b0;
@@ -269,15 +347,22 @@ always_ff @(posedge clk, negedge rst_n) begin
     end
 end
 
-assign new_pc_unaligned_next = exu2ifu_pc_new_req_i ? exu2ifu_pc_new_i[1]
-                             : ~imem_resp_vd        ? new_pc_unaligned_ff
+`ifdef BPU 
+assign new_pc_unaligned_next = exu2ifu_pc_new_req_i ? exu2ifu_pc_new_i[1] //���� ������ ��� ������ PC 1, �� ������������� �����
+                            : ((bpu2ifu_prediction_i & ifu2idu_vd_o & idu2ifu_rdy_i) ? bpu2ifu_new_pc_i[1]
+                            : (~imem_resp_vd        ? new_pc_unaligned_ff //���������� ���������, ���� ��� ����� ����������
+                                                    : 1'b0));
+`else
+assign new_pc_unaligned_next = exu2ifu_pc_new_req_i ? exu2ifu_pc_new_i[1] //���� ������ ��� ������ PC 1, �� ������������� �����
+                             : ~imem_resp_vd        ? new_pc_unaligned_ff //���������� ���������, ���� ��� ����� ����������
                                                     : 1'b0;
+`endif
 
 // Instruction type decoder
 //------------------------------------------------------------------------------
 
-assign instr_hi_is_rvi = &imem2ifu_rdata_i[17:16];
-assign instr_lo_is_rvi = &imem2ifu_rdata_i[1:0];
+assign instr_hi_is_rvi = &imem2ifu_rdata_i[17:16]; //1 ���� RVI ���������� �� �������� �����
+assign instr_lo_is_rvi = &imem2ifu_rdata_i[1:0]; //1 ���� RVI ����������
 
 always_comb begin
     instr_type = SCR1_IFU_INSTR_NONE;
@@ -309,7 +394,7 @@ always_ff @(posedge clk, negedge rst_n) begin
     if (~rst_n) begin
         instr_hi_rvi_lo_ff <= 1'b0;
     end else begin
-        if (exu2ifu_pc_new_req_i) begin
+        if (exu2ifu_pc_new_req_i `ifdef BPU | (bpu2ifu_prediction_i & ifu2idu_vd_o & idu2ifu_rdy_i) `endif) begin
             instr_hi_rvi_lo_ff <= 1'b0;
         end else if (imem_resp_vd) begin
             instr_hi_rvi_lo_ff <= instr_hi_rvi_lo_next;
@@ -325,63 +410,64 @@ assign instr_hi_rvi_lo_next = (instr_type == SCR1_IFU_INSTR_RVI_LO_NV)
 //------------------------------------------------------------------------------
 
 // Queue read size decoder
-assign q_rd_vd    = ~q_is_empty & ifu2idu_vd_o & idu2ifu_rdy_i;
-assign q_rd_hword = q_head_is_rvc | q_err_head
+assign q_rd_vd    = ~q_is_empty & ifu2idu_vd_o & idu2ifu_rdy_i; //������� �� ����� � ���������� ifu �������� ����� � 
+                                                                //���������� idu ��� ������. ���� ��� �������� �����
+assign q_rd_hword = q_head_is_rvc | q_err_head //�������� ������� - �������� ����� ��� ������
 `ifdef SCR1_NO_DEC_STAGE
-                  | (q_head_is_rvi & instr_bypass_vd)
+                  | (q_head_is_rvi & instr_bypass_vd)//�������� ������� - rvi � ���������� �� ��������� � �����
 `endif // SCR1_NO_DEC_STAGE
                   ;
-assign q_rd_size  = ~q_rd_vd   ? SCR1_IFU_QUEUE_RD_NONE
-                  : q_rd_hword ? SCR1_IFU_QUEUE_RD_HWORD
-                               : SCR1_IFU_QUEUE_RD_WORD;
-assign q_rd_none  = (q_rd_size == SCR1_IFU_QUEUE_RD_NONE);
+assign q_rd_size  = ~q_rd_vd   ? SCR1_IFU_QUEUE_RD_NONE //��� ���������� �� �������
+                  : q_rd_hword ? SCR1_IFU_QUEUE_RD_HWORD//���������� �������� �����
+                               : SCR1_IFU_QUEUE_RD_WORD;//���������� ������ �����
+assign q_rd_none  = (q_rd_size == SCR1_IFU_QUEUE_RD_NONE);//��� ���������� �� �������
 
 // Queue write size decoder
 always_comb begin
-    q_wr_size = SCR1_IFU_QUEUE_WR_NONE;
-    if (~imem_resp_discard_req) begin
-        if (imem_resp_ok) begin
-`ifdef SCR1_NO_DEC_STAGE
+    q_wr_size = SCR1_IFU_QUEUE_WR_NONE; //��� ������ � �������
+    if (~imem_resp_discard_req) begin //�� ��������� ����� ������� �� ���� �����
+        if (imem_resp_ok) begin //���������� �������
+`ifdef SCR1_NO_DEC_STAGE //��� ������������� - �������� � �������
             case (instr_type)
-                SCR1_IFU_INSTR_NONE         : q_wr_size = SCR1_IFU_QUEUE_WR_NONE;
-                SCR1_IFU_INSTR_RVI_LO_NV    : q_wr_size = SCR1_IFU_QUEUE_WR_HI;
-                SCR1_IFU_INSTR_RVC_NV       : q_wr_size = (instr_bypass_vd & idu2ifu_rdy_i)
-                                                        ? SCR1_IFU_QUEUE_WR_NONE
-                                                        : SCR1_IFU_QUEUE_WR_HI;
-                SCR1_IFU_INSTR_RVI_HI_RVI_LO: q_wr_size = (instr_bypass_vd & idu2ifu_rdy_i)
-                                                        ? SCR1_IFU_QUEUE_WR_NONE
-                                                        : SCR1_IFU_QUEUE_WR_FULL;
+                SCR1_IFU_INSTR_NONE         : q_wr_size = SCR1_IFU_QUEUE_WR_NONE; //��� ������
+                SCR1_IFU_INSTR_RVI_LO_NV    : q_wr_size = SCR1_IFU_QUEUE_WR_HI;//���������� ������� ����� ����������
+                SCR1_IFU_INSTR_RVC_NV       : q_wr_size = (instr_bypass_vd & idu2ifu_rdy_i)//���� � ����� � idu ������
+                                                        ? SCR1_IFU_QUEUE_WR_NONE//��� ������
+                                                        : SCR1_IFU_QUEUE_WR_HI;//���������� ������� 16 ���
+                SCR1_IFU_INSTR_RVI_HI_RVI_LO: q_wr_size = (instr_bypass_vd & idu2ifu_rdy_i)//���� � ����� � idu ������
+                                                        ? SCR1_IFU_QUEUE_WR_NONE //��� ������
+                                                        : SCR1_IFU_QUEUE_WR_FULL;//32 ����
                 SCR1_IFU_INSTR_RVC_RVC,
                 SCR1_IFU_INSTR_RVI_LO_RVC,
                 SCR1_IFU_INSTR_RVC_RVI_HI,
-                SCR1_IFU_INSTR_RVI_LO_RVI_HI: q_wr_size = (instr_bypass_vd & idu2ifu_rdy_i)
-                                                        ? SCR1_IFU_QUEUE_WR_HI
-                                                        : SCR1_IFU_QUEUE_WR_FULL;
+                SCR1_IFU_INSTR_RVI_LO_RVI_HI: q_wr_size = (instr_bypass_vd & idu2ifu_rdy_i)//���� � ����� � idu ������
+                                                        ? SCR1_IFU_QUEUE_WR_HI//������� 16 ���
+                                                        : SCR1_IFU_QUEUE_WR_FULL;//32 ����
             endcase // instr_type
-`else // SCR1_NO_DEC_STAGE
+`else // SCR1_NO_DEC_STAGE //� ������ 
             case (instr_type)
-                SCR1_IFU_INSTR_NONE         : q_wr_size = SCR1_IFU_QUEUE_WR_NONE;
+                SCR1_IFU_INSTR_NONE         : q_wr_size = SCR1_IFU_QUEUE_WR_NONE;//��� ������
                 SCR1_IFU_INSTR_RVC_NV,
-                SCR1_IFU_INSTR_RVI_LO_NV    : q_wr_size = SCR1_IFU_QUEUE_WR_HI;
-                default                     : q_wr_size = SCR1_IFU_QUEUE_WR_FULL;
+                SCR1_IFU_INSTR_RVI_LO_NV    : q_wr_size = SCR1_IFU_QUEUE_WR_HI; //������� 16 ���
+                default                     : q_wr_size = SCR1_IFU_QUEUE_WR_FULL;//32 ����
             endcase // instr_type
 `endif // SCR1_NO_DEC_STAGE
-        end else if (imem_resp_er) begin
-            q_wr_size = SCR1_IFU_QUEUE_WR_FULL;
+        end else if (imem_resp_er) begin//��������� ����������
+            q_wr_size = SCR1_IFU_QUEUE_WR_FULL; //32 ����
         end // imem_resp_er
     end // ~imem_resp_discard_req
 end
 
-assign q_wr_none   = (q_wr_size == SCR1_IFU_QUEUE_WR_NONE);
-assign q_wr_full   = (q_wr_size == SCR1_IFU_QUEUE_WR_FULL);
+assign q_wr_none   = (q_wr_size == SCR1_IFU_QUEUE_WR_NONE);//��� ������
+assign q_wr_full   = (q_wr_size == SCR1_IFU_QUEUE_WR_FULL);//32 ����
 
 // Write/read pointer registers
 //------------------------------------------------------------------------------
 
-assign q_flush_req = exu2ifu_pc_new_req_i | pipe2ifu_stop_fetch_i;
+assign q_flush_req = exu2ifu_pc_new_req_i | pipe2ifu_stop_fetch_i `ifdef BPU | (bpu2ifu_prediction_i & ifu2idu_vd_o & idu2ifu_rdy_i) `endif; //�������� ������� ��� ����� �� ��� ��������� �������
 
-// Queue write pointer register
-assign q_wptr_upd  = q_flush_req | ~q_wr_none;
+// Queue write pointer register ��������� �� ������
+assign q_wptr_upd  = q_flush_req | ~q_wr_none; //���������� ��������� �� ������ ��� �������� ��� ������
 
 always_ff @(posedge clk, negedge rst_n) begin
     if (~rst_n) begin
@@ -391,12 +477,13 @@ always_ff @(posedge clk, negedge rst_n) begin
     end
 end
 
-assign q_wptr_next = q_flush_req ? '0
-                   : ~q_wr_none  ? q_wptr + (q_wr_full ? SCR1_IFU_QUEUE_PTR_W'('b010) : SCR1_IFU_QUEUE_PTR_W'('b001))
-                                 : q_wptr;
+assign q_wptr_next = q_flush_req ? '0 //���� ������� - ��������� �� ����
+/* ���� ���� ������  */: ~q_wr_none  ? q_wptr + (q_wr_full ? SCR1_IFU_QUEUE_PTR_W'('b010) : SCR1_IFU_QUEUE_PTR_W'('b001))
+                                                //��� ������ ����� �������� �� ���, ��� ������ ��������� �� ����
+                                 : q_wptr; 
 
 // Queue read pointer register
-assign q_rptr_upd  = q_flush_req | ~q_rd_none;
+assign q_rptr_upd  = q_flush_req | ~q_rd_none; //��� �������� ��� ������
 
 always_ff @(posedge clk, negedge rst_n) begin
     if (~rst_n) begin
@@ -406,17 +493,18 @@ always_ff @(posedge clk, negedge rst_n) begin
     end
 end
 
-assign q_rptr_next = q_flush_req ? '0
-                   : ~q_rd_none  ? q_rptr + (q_rd_hword ? SCR1_IFU_QUEUE_PTR_W'('b001) : SCR1_IFU_QUEUE_PTR_W'('b010))
+assign q_rptr_next = q_flush_req ? '0 //���� ������� - ��������� �� ����
+/* ���� ���� ������*/: ~q_rd_none  ? q_rptr + (q_rd_hword ? SCR1_IFU_QUEUE_PTR_W'('b001) : SCR1_IFU_QUEUE_PTR_W'('b010))
+                                 //��� ������ ��������� +1, ��� ������ ����� +2
                                  : q_rptr;
 
 // Queue data and error flag registers
 //------------------------------------------------------------------------------
 
-assign imem_rdata_hi = imem2ifu_rdata_i[31:16];
-assign imem_rdata_lo = imem2ifu_rdata_i[15:0];
+assign imem_rdata_hi = imem2ifu_rdata_i[31:16]; //������� 16 ��� ������
+assign imem_rdata_lo = imem2ifu_rdata_i[15:0];//�������� 16 ��� ������
 
-assign q_wr_en = imem_resp_vd & ~q_flush_req;
+assign q_wr_en = imem_resp_vd & ~q_flush_req; //���������� �� ������ ��� ���������� �� ����������� ���������� � �� ������� �������
 
 always_ff @(posedge clk, negedge rst_n) begin
     if (~rst_n) begin
@@ -424,35 +512,35 @@ always_ff @(posedge clk, negedge rst_n) begin
         q_err   <= '{SCR1_IFU_Q_SIZE_HALF{1'b0}};
     end else if (q_wr_en) begin
         case (q_wr_size)
-            SCR1_IFU_QUEUE_WR_HI    : begin
+            SCR1_IFU_QUEUE_WR_HI    : begin //������ ������� 16 ��� � �������
                 q_data[SCR1_IFU_QUEUE_ADR_W'(q_wptr)]         <= imem_rdata_hi;
                 q_err [SCR1_IFU_QUEUE_ADR_W'(q_wptr)]         <= imem_resp_er;
             end
             SCR1_IFU_QUEUE_WR_FULL  : begin
                 q_data[SCR1_IFU_QUEUE_ADR_W'(q_wptr)]         <= imem_rdata_lo;
                 q_err [SCR1_IFU_QUEUE_ADR_W'(q_wptr)]         <= imem_resp_er;
-                q_data[SCR1_IFU_QUEUE_ADR_W'(q_wptr + 1'b1)]  <= imem_rdata_hi;
+                q_data[SCR1_IFU_QUEUE_ADR_W'(q_wptr + 1'b1)]  <= imem_rdata_hi;//+1 ����� �������� ������� �����
                 q_err [SCR1_IFU_QUEUE_ADR_W'(q_wptr + 1'b1)]  <= imem_resp_er;
             end
         endcase
     end
 end
 
-assign q_data_head = q_data [SCR1_IFU_QUEUE_ADR_W'(q_rptr)];
-assign q_data_next = q_data [SCR1_IFU_QUEUE_ADR_W'(q_rptr + 1'b1)];
+assign q_data_head = q_data [SCR1_IFU_QUEUE_ADR_W'(q_rptr)]; //�������� ������� �� �������� ���������
+assign q_data_next = q_data [SCR1_IFU_QUEUE_ADR_W'(q_rptr + 1'b1)];//��������� ������� �� ������� ���������
 assign q_err_head  = q_err  [SCR1_IFU_QUEUE_ADR_W'(q_rptr)];
 assign q_err_next  = q_err  [SCR1_IFU_QUEUE_ADR_W'(q_rptr + 1'b1)];
 
-// Queue status logic
+// Queue status logic ?????
 //------------------------------------------------------------------------------
 
-assign q_ocpd_h         = SCR1_IFU_Q_FREE_H_W'(q_wptr - q_rptr);
-assign q_free_h_next    = SCR1_IFU_Q_FREE_H_W'(SCR1_IFU_Q_SIZE_HALF - (q_wptr - q_rptr_next));
-assign q_free_w_next    = SCR1_IFU_Q_FREE_W_W'(q_free_h_next >> 1'b1);
+assign q_ocpd_h         = SCR1_IFU_Q_FREE_H_W'(q_wptr - q_rptr);//������� ����� �����������, ����� ��������� � �������?
+assign q_free_h_next    = SCR1_IFU_Q_FREE_H_W'(SCR1_IFU_Q_SIZE_HALF - (q_wptr - q_rptr_next));//��������� �������� �� ���� �����
+assign q_free_w_next    = SCR1_IFU_Q_FREE_W_W'(q_free_h_next >> 1'b1);//��������� ���� �� ���� �����
 
 assign q_is_empty       = (q_rptr == q_wptr);
-assign q_has_free_slots = (SCR1_TXN_CNT_W'(q_free_w_next) > imem_vd_pnd_txns_cnt);
-assign q_has_1_ocpd_hw  = (q_ocpd_h == SCR1_IFU_Q_FREE_H_W'(1));
+assign q_has_free_slots = (SCR1_TXN_CNT_W'(q_free_w_next) > imem_vd_pnd_txns_cnt);//���� ������, ��� ����� ������ ����������
+assign q_has_1_ocpd_hw  = (q_ocpd_h == SCR1_IFU_Q_FREE_H_W'(1));//1 ����������
 
 assign q_head_is_rvi    = &(q_data_head[1:0]);
 assign q_head_is_rvc    = ~q_head_is_rvi;
@@ -504,18 +592,19 @@ assign ifu_fsm_fetch = (ifu_fsm_curr == SCR1_IFU_FSM_FETCH);
 // IMEM response logic
 //------------------------------------------------------------------------------
 
-assign imem_resp_er             = (imem2ifu_resp_i == SCR1_MEM_RESP_RDY_ER);
-assign imem_resp_ok             = (imem2ifu_resp_i == SCR1_MEM_RESP_RDY_OK);
-assign imem_resp_received       = imem_resp_ok | imem_resp_er;
-assign imem_resp_vd             = imem_resp_received & ~imem_resp_discard_req;
-assign imem_resp_er_discard_pnd = imem_resp_er & ~imem_resp_discard_req;
+assign imem_resp_er             = (imem2ifu_resp_i == SCR1_MEM_RESP_RDY_ER); //������ ��� ��������� ����������
+assign imem_resp_ok             = (imem2ifu_resp_i == SCR1_MEM_RESP_RDY_OK); //���������� �������
+assign imem_resp_received       = imem_resp_ok | imem_resp_er; //���������� ��������
+assign imem_resp_vd             = imem_resp_received & ~imem_resp_discard_req; //���������� �������� � ������ �� ���������
+assign imem_resp_er_discard_pnd = imem_resp_er & ~imem_resp_discard_req; //���������� �������� � ������ �� ��������� �� ������ �����
 
-assign imem_handshake_done = ifu2imem_req_o & imem2ifu_req_ack_i;
+assign imem_handshake_done = ifu2imem_req_o & imem2ifu_req_ack_i; //������ ��������� � imem ������ ������������ ������
 
 // IMEM address register
 //------------------------------------------------------------------------------
 
-assign imem_addr_upd = imem_handshake_done | exu2ifu_pc_new_req_i;
+assign imem_addr_upd = imem_handshake_done | exu2ifu_pc_new_req_i `ifdef BPU | (bpu2ifu_prediction_i & ifu2idu_vd_o & idu2ifu_rdy_i)  `endif; //����� �����������, ����� ����� ����������� ���(�) 
+                                                                   //��������� ����� ��
 
 always_ff @(posedge clk, negedge rst_n) begin
     if (~rst_n) begin
@@ -525,12 +614,19 @@ always_ff @(posedge clk, negedge rst_n) begin
     end
 end
 
-`ifndef SCR1_NEW_PC_REG
-assign imem_addr_next = exu2ifu_pc_new_req_i ? exu2ifu_pc_new_i[`SCR1_XLEN-1:2]                 + imem_handshake_done
+`ifndef SCR1_NEW_PC_REG //������� ��� ������ �� ��������
+assign imem_addr_next = exu2ifu_pc_new_req_i ? exu2ifu_pc_new_i[`SCR1_XLEN-1:2]                 + imem_handshake_done //����� �� + 4 ��� ���������� ��
+                    `ifdef BPU
+                      : (bpu2ifu_prediction_i & ifu2idu_vd_o & idu2ifu_rdy_i) ? bpu2ifu_new_pc_i[`SCR1_XLEN-1:2]                 + imem_handshake_done
+                    `endif
                       : &imem_addr_ff[5:2]   ? imem_addr_ff                                     + imem_handshake_done
                                              : {imem_addr_ff[`SCR1_XLEN-1:6], imem_addr_ff[5:2] + imem_handshake_done};
+                        //������ ������������ ������ ������� 4 ���� ������?
 `else // SCR1_NEW_PC_REG
 assign imem_addr_next = exu2ifu_pc_new_req_i ? exu2ifu_pc_new_i[`SCR1_XLEN-1:2]
+                    `ifdef BPU
+                      : (bpu2ifu_prediction_i & ifu2idu_vd_o & idu2ifu_rdy_i) ? bpu2ifu_new_pc_i[`SCR1_XLEN-1:2]
+                    `endif 
                       : &imem_addr_ff[5:2]   ? imem_addr_ff                                     + imem_handshake_done
                                              : {imem_addr_ff[`SCR1_XLEN-1:6], imem_addr_ff[5:2] + imem_handshake_done};
 `endif // SCR1_NEW_PC_REG
@@ -539,21 +635,24 @@ assign imem_addr_next = exu2ifu_pc_new_req_i ? exu2ifu_pc_new_i[`SCR1_XLEN-1:2]
 //------------------------------------------------------------------------------
 // Pending IMEM transactions occur if IFU request has been acknowledged, but
 // response comes in the next cycle or later
-
-assign imem_pnd_txns_cnt_upd  = imem_handshake_done ^ imem_resp_received;
+//���������� ���������� IMEM ����������, ���� ������ IFU ��� �����������, �� ����� ������ � ��������� ����� ��� �����, �.� � ��� ������ ��� ����������
+//��� �� �� ����� �� ��������� �����
+assign imem_pnd_txns_cnt_upd  = imem_handshake_done ^ imem_resp_received;// ��������� �������, ����� ������ ��������� �
+                                                                         // ����������� ��� ������� �����
 
 always_ff @(posedge clk, negedge rst_n) begin
     if (~rst_n) begin
-        imem_pnd_txns_cnt <= '0;
+        imem_pnd_txns_cnt <= '0; //���������� �������
     end else if (imem_pnd_txns_cnt_upd) begin
-        imem_pnd_txns_cnt <= imem_pnd_txns_cnt_next;
+        imem_pnd_txns_cnt <= imem_pnd_txns_cnt_next; //����������, ������� ���������� � ��������
     end
 end
 
-assign imem_pnd_txns_cnt_next = imem_pnd_txns_cnt + (imem_handshake_done - imem_resp_received);
-assign imem_pnd_txns_q_full   = &imem_pnd_txns_cnt;
+assign imem_pnd_txns_cnt_next = imem_pnd_txns_cnt + (imem_handshake_done - imem_resp_received); //���� imem_handshake_done=0
+                                                                            //� imem_resp_received=1, �� -1                          
+assign imem_pnd_txns_q_full   = &imem_pnd_txns_cnt; //����� ��� ���� 1
 
-// IMEM discard responses counter
+// IMEM discard responses counter ������ ����������
 //------------------------------------------------------------------------------
 // IMEM instructions should be discarded in the following 2 cases:
 // 1. New PC is requested by jump, branch, mret or other instruction
@@ -566,23 +665,26 @@ assign imem_pnd_txns_q_full   = &imem_pnd_txns_cnt;
 // In the 2nd case, since the IMEM responce was erroneous there is no guarantee
 // that subsequent IMEM instructions would be valid.
 
-assign imem_resp_discard_cnt_upd = exu2ifu_pc_new_req_i | imem_resp_er
-                                 | (imem_resp_ok & imem_resp_discard_req);
-
+assign imem_resp_discard_cnt_upd = exu2ifu_pc_new_req_i | imem_resp_er      //��������� �������, ����� ����� �� � execute,
+                                 | (imem_resp_ok & imem_resp_discard_req)  // ��� ������ ������ ������, ��� ������ ���,
+                      `ifdef BPU | (bpu2ifu_prediction_i & ifu2idu_vd_o & idu2ifu_rdy_i) `endif;             // �� ��������� �����
 always_ff @(posedge clk, negedge rst_n) begin
     if (~rst_n) begin
         imem_resp_discard_cnt <= '0;
     end else if (imem_resp_discard_cnt_upd) begin
-        imem_resp_discard_cnt <= imem_resp_discard_cnt_next;
+        imem_resp_discard_cnt <= imem_resp_discard_cnt_next; //������� ����������
     end
 end
 
 `ifndef SCR1_NEW_PC_REG
-assign imem_resp_discard_cnt_next = exu2ifu_pc_new_req_i     ? imem_pnd_txns_cnt_next - imem_handshake_done
-                                  : imem_resp_er_discard_pnd ? imem_pnd_txns_cnt_next
-                                                             : imem_resp_discard_cnt - 1'b1;
+assign imem_resp_discard_cnt_next = exu2ifu_pc_new_req_i     ? imem_pnd_txns_cnt_next - imem_handshake_done //���������, ����������, ������� �����
+                                                                         //������ � ��������, ���� ������ ����� ��. -handshake �.�. �� ��������� � ������ PC
+                       `ifdef BPU : (bpu2ifu_prediction_i & ifu2idu_vd_o & idu2ifu_rdy_i)     ? imem_pnd_txns_cnt_next - imem_handshake_done `endif
+                                  : imem_resp_er_discard_pnd ? imem_pnd_txns_cnt_next//��� ��� ���������� �������� ��� ������� � ��,
+                                                                                     //��� ����� ��������� �� ����� �����
+                                                             : imem_resp_discard_cnt - 1'b1;//���� ���������� �� �������� � ��������� �����
 `else // SCR1_NEW_PC_REG
-assign imem_resp_discard_cnt_next = exu2ifu_pc_new_req_i | imem_resp_er_discard_pnd
+assign imem_resp_discard_cnt_next = exu2ifu_pc_new_req_i | imem_resp_er_discard_pnd `ifdef BPU | (bpu2ifu_prediction_i & ifu2idu_vd_o & idu2ifu_rdy_i) `endif
                                   ? imem_pnd_txns_cnt_next
                                   : imem_resp_discard_cnt - 1'b1;
 `endif // SCR1_NEW_PC_REG
@@ -595,9 +697,12 @@ assign imem_resp_discard_req = |imem_resp_discard_cnt;
 
 `ifndef SCR1_NEW_PC_REG
 assign ifu2imem_req_o  = (exu2ifu_pc_new_req_i & ~imem_pnd_txns_q_full & ~pipe2ifu_stop_fetch_i)
+            `ifdef BPU | (bpu2ifu_prediction_i & ifu2idu_vd_o & idu2ifu_rdy_i & ~imem_pnd_txns_q_full & ~pipe2ifu_stop_fetch_i) `endif
                        | (ifu_fsm_fetch        & ~imem_pnd_txns_q_full & q_has_free_slots);
 assign ifu2imem_addr_o = exu2ifu_pc_new_req_i
                        ? {exu2ifu_pc_new_i[`SCR1_XLEN-1:2], 2'b00}
+            `ifdef BPU : (bpu2ifu_prediction_i & ifu2idu_vd_o & idu2ifu_rdy_i)
+                       ? {bpu2ifu_new_pc_i[`SCR1_XLEN-1:2], 2'b00} `endif
                        : {imem_addr_ff, 2'b00};
 `else // SCR1_NEW_PC_REG
 assign ifu2imem_req_o  = ifu_fsm_fetch & ~imem_pnd_txns_q_full & q_has_free_slots;

@@ -61,7 +61,7 @@
 
 //`define SCR1_CFG_RV32IMC_MAX
 //`define SCR1_CFG_RV32IC_BASE
-//`define SCR1_CFG_RV32EC_MIN
+`define SCR1_CFG_RV32EC_MIN
 
 // If all defines are commented, custom configuration will be used (see below)
 
@@ -83,6 +83,7 @@
   `define SCR1_IPIC_EN
   `define SCR1_IPIC_SYNC_EN
   `define SCR1_TCM_EN
+  `define BPU
 `elsif  SCR1_CFG_RV32IC_BASE
   `define SCR1_RVI_EXT
   `define SCR1_RVC_EXT
@@ -105,6 +106,7 @@
   `define SCR1_NO_DEC_STAGE
   `define SCR1_NO_EXE_STAGE
   `define SCR1_TCM_EN
+  
 
 `else // begin custom configuration section
 

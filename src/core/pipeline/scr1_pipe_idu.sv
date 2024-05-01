@@ -33,12 +33,20 @@ module scr1_pipe_idu
     input   logic                           ifu2idu_imem_err_i,     // Instruction access fault exception
     input   logic                           ifu2idu_err_rvi_hi_i,   // 1 - imem fault when trying to fetch second half of an unaligned RVI instruction
     input   logic                           ifu2idu_vd_i,           // IFU request
+`ifdef BPU
+    input   logic                           ifu2idu_prediction_i,
+    input   logic [`SCR1_XLEN-1:0]          ifu2idu_predicted_pc_i,
+`endif
 
     // IDU <-> EXU interface
     output  logic                           idu2exu_req_o,          // IDU request
     output  type_scr1_exu_cmd_s             idu2exu_cmd_o,          // IDU command
     output  logic                           idu2exu_use_rs1_o,      // Instruction uses rs1
     output  logic                           idu2exu_use_rs2_o,      // Instruction uses rs2
+`ifdef BPU
+    output  logic                           idu2exu_prediction_o,
+    output  logic [`SCR1_XLEN-1:0]          idu2exu_predicted_pc_o,
+`endif
 `ifndef SCR1_NO_EXE_STAGE
     output  logic                           idu2exu_use_rd_o,       // Instruction uses rd
     output  logic                           idu2exu_use_imm_o,      // Instruction uses immediate
@@ -50,9 +58,9 @@ module scr1_pipe_idu
 // Local parameters declaration
 //-------------------------------------------------------------------------------
 
-localparam [SCR1_GPR_FIELD_WIDTH-1:0] SCR1_MPRF_ZERO_ADDR   = 5'd0;
-localparam [SCR1_GPR_FIELD_WIDTH-1:0] SCR1_MPRF_RA_ADDR     = 5'd1;
-localparam [SCR1_GPR_FIELD_WIDTH-1:0] SCR1_MPRF_SP_ADDR     = 5'd2;
+localparam [SCR1_GPR_FIELD_WIDTH-1:0] SCR1_MPRF_ZERO_ADDR   = 5'd0; //zero
+localparam [SCR1_GPR_FIELD_WIDTH-1:0] SCR1_MPRF_RA_ADDR     = 5'd1; //return address
+localparam [SCR1_GPR_FIELD_WIDTH-1:0] SCR1_MPRF_SP_ADDR     = 5'd2; //stack pointer
 
 //-------------------------------------------------------------------------------
 // Local signals declaration
@@ -73,12 +81,20 @@ logic                               rvc_illegal;
 logic                               rve_illegal;
 `endif  // SCR1_RVE_EXT
 
+//------------------------------------------------------------------------------
+// Branch Prediction
+//------------------------------------------------------------------------------
+`ifdef BPU
+assign idu2exu_prediction_o = ifu2idu_prediction_i;
+assign idu2exu_predicted_pc_o = ifu2idu_predicted_pc_i;
+`endif
+
 //-------------------------------------------------------------------------------
 // Instruction decoding
 //-------------------------------------------------------------------------------
 
-assign idu2ifu_rdy_o  = exu2idu_rdy_i;
-assign idu2exu_req_o  = ifu2idu_vd_i;
+assign idu2ifu_rdy_o  = exu2idu_rdy_i; //IDU ����� ��� ����� ������
+assign idu2exu_req_o  = ifu2idu_vd_i; //IDU ����� ��� ��������, ����� IFU �����
 assign instr          = ifu2idu_instr_i;
 
 // RVI / RVC
@@ -88,31 +104,31 @@ assign instr_type   = type_scr1_instr_type_e'(instr[1:0]);
 assign rvi_opcode   = type_scr1_rvi_opcode_e'(instr[6:2]);                          // RVI
 assign funct3       = (instr_type == SCR1_INSTR_RVI) ? instr[14:12] : instr[15:13]; // RVI / RVC
 assign funct7       = instr[31:25];                                                 // RVI
-assign funct12      = instr[31:20];                                                 // RVI (SYSTEM)
-assign shamt        = instr[24:20];                                                 // RVI
+assign funct12      = instr[31:20];                                                 // RVI (SYSTEM) csr imm
+assign shamt        = instr[24:20];                                                 // RVI ��� ���������� ������ imm
 
 // RV32I(MC) decode
 always_comb begin
     // Defaults
-    idu2exu_cmd_o.instr_rvc   = 1'b0;
-    idu2exu_cmd_o.ialu_op     = SCR1_IALU_OP_REG_REG;
-    idu2exu_cmd_o.ialu_cmd    = SCR1_IALU_CMD_NONE;
-    idu2exu_cmd_o.sum2_op     = SCR1_SUM2_OP_PC_IMM;
-    idu2exu_cmd_o.lsu_cmd     = SCR1_LSU_CMD_NONE;
-    idu2exu_cmd_o.csr_op      = SCR1_CSR_OP_REG;
-    idu2exu_cmd_o.csr_cmd     = SCR1_CSR_CMD_NONE;
-    idu2exu_cmd_o.rd_wb_sel   = SCR1_RD_WB_NONE;
-    idu2exu_cmd_o.jump_req    = 1'b0;
-    idu2exu_cmd_o.branch_req  = 1'b0;
-    idu2exu_cmd_o.mret_req    = 1'b0;
-    idu2exu_cmd_o.fencei_req  = 1'b0;
-    idu2exu_cmd_o.wfi_req     = 1'b0;
-    idu2exu_cmd_o.rs1_addr    = '0;
+    idu2exu_cmd_o.instr_rvc   = 1'b0; //�� rvc
+    idu2exu_cmd_o.ialu_op     = SCR1_IALU_OP_REG_REG; //�������� ��� - op1 = rs1; op2 = rs2
+    idu2exu_cmd_o.ialu_cmd    = SCR1_IALU_CMD_NONE; //��� �������� ���, � ������ ������ ��� ��������
+    idu2exu_cmd_o.sum2_op     = SCR1_SUM2_OP_PC_IMM; //IALU SUM2 operands (result is JUMP/BRANCH target, LOAD/STORE address)
+    idu2exu_cmd_o.lsu_cmd     = SCR1_LSU_CMD_NONE; //��� ������� � ������ ������ - lhu, lb � �.�.
+    idu2exu_cmd_o.csr_op      = SCR1_CSR_OP_REG; //��� ������� �������� ��� CSR - imm ��� rs1
+    idu2exu_cmd_o.csr_cmd     = SCR1_CSR_CMD_NONE; //��� �������� CSR - write, clear, set
+    idu2exu_cmd_o.rd_wb_sel   = SCR1_RD_WB_NONE; //�������� ��� ������ � ����������� ����
+    idu2exu_cmd_o.jump_req    = 1'b0; //������������� ������
+    idu2exu_cmd_o.branch_req  = 1'b0; //������������� ���������
+    idu2exu_cmd_o.mret_req    = 1'b0; //������� �� ��������� ����������
+    idu2exu_cmd_o.fencei_req  = 1'b0; //������������� fence.i 
+    idu2exu_cmd_o.wfi_req     = 1'b0;//wait for interrupt?
+    idu2exu_cmd_o.rs1_addr    = '0; //also used as zimm for CSRRxI instructions
     idu2exu_cmd_o.rs2_addr    = '0;
     idu2exu_cmd_o.rd_addr     = '0;
     idu2exu_cmd_o.imm         = '0;
-    idu2exu_cmd_o.exc_req     = 1'b0;
-    idu2exu_cmd_o.exc_code    = SCR1_EXC_CODE_INSTR_MISALIGN;
+    idu2exu_cmd_o.exc_req     = 1'b0; //����������
+    idu2exu_cmd_o.exc_code    = SCR1_EXC_CODE_INSTR_MISALIGN; //��� ���������
 
     // Clock gating
     idu2exu_use_rs1_o         = 1'b0;
@@ -151,7 +167,7 @@ always_comb begin
                         idu2exu_cmd_o.rd_wb_sel   = SCR1_RD_WB_SUM2;
                         idu2exu_cmd_o.imm         = {instr[31:12], 12'b0};
 `ifdef SCR1_RVE_EXT
-                        if (instr[11])          rve_illegal = 1'b1;
+                        if (instr[11])          rve_illegal = 1'b1; //���� ������ � ��������� 16-31
 `endif  // SCR1_RVE_EXT
                     end // SCR1_OPCODE_AUIPC
 
@@ -199,7 +215,7 @@ always_comb begin
                             default : rvi_illegal = 1'b1;
                         endcase // funct3
 `ifdef SCR1_RVE_EXT
-                        if (instr[11] | instr[19])  rve_illegal = 1'b1;
+                        if (instr[11] | instr[19])  rve_illegal = 1'b1; //���� ������ � ��������� 16-31
 `endif  // SCR1_RVE_EXT
                     end // SCR1_OPCODE_LOAD
 
@@ -218,7 +234,7 @@ always_comb begin
                             default : rvi_illegal = 1'b1;
                         endcase // funct3
 `ifdef SCR1_RVE_EXT
-                        if (instr[19] | instr[24])  rve_illegal = 1'b1;
+                        if (instr[19] | instr[24])  rve_illegal = 1'b1; //���� ������ � ��������� 16-31
 `endif  // SCR1_RVE_EXT
                     end // SCR1_OPCODE_STORE
 
@@ -268,7 +284,7 @@ always_comb begin
                             default : rvi_illegal = 1'b1;
                         endcase // funct7
 `ifdef SCR1_RVE_EXT
-                        if (instr[11] | instr[19] | instr[24])  rve_illegal = 1'b1;
+                        if (instr[11] | instr[19] | instr[24])  rve_illegal = 1'b1; //���� ������ � ��������� 16-31
 `endif  // SCR1_RVE_EXT
                     end // SCR1_OPCODE_OP
 
@@ -315,20 +331,20 @@ always_comb begin
                             end
                         endcase // funct3
 `ifdef SCR1_RVE_EXT
-                        if (instr[11] | instr[19])  rve_illegal = 1'b1;
+                        if (instr[11] | instr[19])  rve_illegal = 1'b1; //���� ������ � ��������� 16-31
 `endif  // SCR1_RVE_EXT
                     end // SCR1_OPCODE_OP_IMM
 
                     SCR1_OPCODE_MISC_MEM    : begin
                         case (funct3)
                             3'b000  : begin
-                                if (~|{instr[31:28], instr[19:15], instr[11:7]}) begin
+                                if (~|{instr[31:28], instr[19:15], instr[11:7]}) begin //��� ���� - ����
                                     // FENCE = NOP
                                 end
                                 else rvi_illegal = 1'b1;
                             end
                             3'b001  : begin
-                                if (~|{instr[31:15], instr[11:7]}) begin
+                                if (~|{instr[31:15], instr[11:7]}) begin //��� ���� - ����
                                     // FENCE.I
                                     idu2exu_cmd_o.fencei_req    = 1'b1;
                                 end
