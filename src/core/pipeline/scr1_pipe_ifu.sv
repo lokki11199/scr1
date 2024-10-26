@@ -931,14 +931,14 @@ assign imem_addr_next = exu2ifu_pc_new_req_i ? exu2ifu_pc_new_i[`SCR1_XLEN-1:2] 
 always_comb begin
     priority case (1'b1)
     exu2ifu_pc_new_req_i   : imem_addr_next = exu2ifu_pc_new_i[`SCR1_XLEN-1:2];
-    bpu2ifu_prediction_lo_i && !imem_addr_unaligned_ff: imem_addr_next = bpu2ifu_new_pc_lo_i[`SCR1_XLEN-1:2]   + imem_handshake_done;
+    bpu2ifu_prediction_lo_i && !imem_addr_unaligned_ff: imem_addr_next = bpu2ifu_new_pc_lo_i[`SCR1_XLEN-1:2];
     `ifdef SCR1_RVC_EXT
-    prev_prediction_hi_ff  : imem_addr_next = prev_predicted_pc_hi[`SCR1_XLEN-1:2]   + imem_handshake_done;
+    prev_prediction_hi_ff  : imem_addr_next = prev_predicted_pc_hi[`SCR1_XLEN-1:2];
     bpu2ifu_prediction_hi_i: imem_addr_next = bpu2ifu_rvi_flag_hi_i
                                             ? (&imem_addr_ff[5:2]   //Branch predicted for unaligned RVI
                                             ? imem_addr_ff + imem_handshake_done
                                             : {imem_addr_ff[`SCR1_XLEN-1:6], imem_addr_ff[5:2] + imem_handshake_done})
-                                            : bpu2ifu_new_pc_hi_i[`SCR1_XLEN-1:2]   + imem_handshake_done; //Branch predicted for unaligned RVC
+                                            : bpu2ifu_new_pc_hi_i[`SCR1_XLEN-1:2]; //Branch predicted for unaligned RVC
     `endif //SCR1_RVC_EXT
     default:                 imem_addr_next = &imem_addr_ff[5:2]   ? imem_addr_ff                                     + imem_handshake_done
                                             : {imem_addr_ff[`SCR1_XLEN-1:6], imem_addr_ff[5:2] + imem_handshake_done};
@@ -1019,14 +1019,10 @@ assign ifu2imem_addr_o = exu2ifu_pc_new_req_i
 always_comb begin
     priority case(1'b1)
        exu2ifu_pc_new_req_i   : ifu2imem_addr_o = {exu2ifu_pc_new_i[`SCR1_XLEN-1:2], 2'b00};
-       bpu2ifu_prediction_lo_i && !imem_addr_unaligned_ff: ifu2imem_addr_o = imem_handshake_done
-                                                ? {bpu2ifu_new_pc_lo_i[`SCR1_XLEN-1:2], 2'b00}
-                                                : {imem_addr_ff, 2'b00};
+       bpu2ifu_prediction_lo_i && !imem_addr_unaligned_ff: ifu2imem_addr_o = {bpu2ifu_new_pc_lo_i[`SCR1_XLEN-1:2], 2'b00};
        `ifdef SCR1_RVC_EXT
        prev_prediction_hi_ff  : ifu2imem_addr_o = {prev_predicted_pc_hi[`SCR1_XLEN-1:2],2'b00};
-       bpu2ifu_prediction_hi_i: ifu2imem_addr_o = !imem_handshake_done
-                                                ? {imem_addr_ff, 2'b00}
-                                                :   bpu2ifu_rvi_flag_hi_i
+       bpu2ifu_prediction_hi_i: ifu2imem_addr_o = bpu2ifu_rvi_flag_hi_i
                                                 ? {imem_addr_ff, 2'b00}
                                                 : {bpu2ifu_new_pc_hi_i[`SCR1_XLEN-1:2], 2'b00};
        `endif // SCR1_RVC_EXT
@@ -1036,24 +1032,7 @@ end
 `endif //BPU
 `else // SCR1_NEW_PC_REG
 assign ifu2imem_req_o  = ifu_fsm_fetch & ~imem_pnd_txns_q_full & q_has_free_slots;
-`ifndef BPU
 assign ifu2imem_addr_o = {imem_addr_ff, 2'b00};
-`else
-always_comb begin
-    priority case(1'b1)
-       bpu2ifu_prediction_lo_i && !imem_addr_unaligned_ff: ifu2imem_addr_o = imem_handshake_done
-                                                ? {bpu2ifu_new_pc_lo_i[`SCR1_XLEN-1:2], 2'b00}
-                                                : {imem_addr_ff, 2'b00};
-       `ifdef SCR1_RVC_EXT
-       prev_prediction_hi_ff  : ifu2imem_addr_o = {prev_predicted_pc_hi[`SCR1_XLEN-1:2],2'b00};
-       bpu2ifu_prediction_hi_i: ifu2imem_addr_o = !imem_handshake_done
-                                                ? {imem_addr_ff, 2'b00}
-                                                :   bpu2ifu_rvi_flag_hi_i
-                                                ? {imem_addr_ff, 2'b00}
-                                                : {bpu2ifu_new_pc_hi_i[`SCR1_XLEN-1:2], 2'b00};
-       `endif // SCR1_RVC_EXT
-       default                : ifu2imem_addr_o = {imem_addr_ff, 2'b00};
-`endif
 `endif // SCR1_NEW_PC_REG
 
 assign ifu2imem_cmd_o  = SCR1_MEM_CMD_RD;

@@ -10,6 +10,7 @@ core/pipeline/scr1_pipe_lsu.sv
 core/pipeline/scr1_pipe_mprf.sv
 core/pipeline/scr1_pipe_top.sv
 core/pipeline/BPU.sv
+core/pipeline/scr1_dp_ram.sv
 core/pipeline/satcount_2bit.sv
 core/primitives/scr1_reset_cells.sv
 core/primitives/scr1_cg.sv
