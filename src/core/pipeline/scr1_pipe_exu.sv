@@ -767,8 +767,8 @@ assign exu2ifu_pc_new_req_o = init_pc                                        // 
                             | dbg_run_start_npbuf
 `endif // SCR1_DBG_EN
 `ifdef BPU
-                            | (exu_queue_vd & exu2ifu_btb_miss_o)
-                            | (exu_queue_vd & bpu_miss)
+                            | exu2ifu_btb_miss_o
+                            | bpu_miss
                             | (exu_queue_vd & exu_queue.jump_req);
 
 `else

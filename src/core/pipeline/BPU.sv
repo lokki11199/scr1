@@ -1,12 +1,13 @@
 `include "scr1_arch_description.svh"
 `define SAT_CNT_2
-module BPU #(parameter DEPTH = 64,// Must be a power of two
+module BPU #(parameter DEPTH = 32,// Must be a power of two
              parameter TAG_UNUSED = 0)
             (
                 input  logic                  clk ,rst_n,
-                input  logic                  ifu2bpu_req_i,//New
                 input  logic [`SCR1_XLEN-1:0] ifu2bpu_pc_i,
-                input  logic                  ifu2bpu_imem_handshake_done,
+                input  logic                  ifu2bpu_imem_handshake_done_i,
+                input  logic                  ifu2bpu_imem_addr_unaligned_upd_i,
+                input  logic                  ifu2bpu_imem_addr_unaligned_next_i,
                 input  logic                  ifu2bpu_pc_new_req_i,
                 input  logic [`SCR1_XLEN-1:0] ifu2bpu_pc_new_i,
                 input  logic                  ifu2bpu_b_type_i,
@@ -36,12 +37,22 @@ typedef struct packed {
     logic [`SCR1_XLEN-1:0]                        pc;
 } branch_buffer;
 
+`ifdef SCR1_RVC_EXT
+typedef enum logic {
+    SCR1_BPU_NORMAL,
+    SCR1_BPU_RVI_HI
+} type_scr1_bpu_fsm;
+
+`endif // SCR1_RVC_EXT
+
 //-------------------------------------------------------------------------------
 // LOCAL VARIABLES DECLARATION
 //-------------------------------------------------------------------------------
-logic prediction_lo;
+logic prediction_lo_cmb;
+logic prediction_lo_ff;
 `ifdef SCR1_RVC_EXT
-logic prediction_hi;
+logic prediction_hi_cmb;
+logic prediction_hi_ff;
 `endif
 logic bpu2stc_b_type_i[0:DEPTH-1];
 logic bpu2stc_new_pc_req_i[0:DEPTH-1];
@@ -74,6 +85,15 @@ logic [$bits(branch_buffer)-1:0] read_data_ram_lo_saved;
 logic [$bits(branch_buffer)-1:0] read_data_ram_hi_saved;
 `endif
 
+`ifdef SCR1_RVC_EXT
+// logic                            prev_prediction_hi_rvi_ff;
+// logic [`SCR1_XLEN-1:0]           prev_predicted_pc_hi_rvi_ff;
+// logic [`SCR1_XLEN-1:0]           prev_prediction_hi_rvi_cmb;
+type_scr1_bpu_fsm                   bpu_state;
+type_scr1_bpu_fsm                   bpu_state_next;
+logic                               prediction_hi_rvi;
+`endif
+
 //-------------------------------------------------------------------------------
 // BTB WRITE/READ OPERATION
 //-------------------------------------------------------------------------------
@@ -86,7 +106,7 @@ assign tag_w      = ifu2bpu_pc_prev_i[`SCR1_XLEN-1-TAG_UNUSED:pc_bit_used+2]; //
 assign pc_w       = ifu2bpu_pc_new_i; //PC write
 
 assign w_en    = ifu2bpu_b_type_i && ifu2bpu_pc_new_req_i && (!ifu2bpu_prev_prediction_i | ifu2bpu_btb_miss_i);
-assign r_en    = ifu2bpu_imem_handshake_done;
+assign r_en    = (ifu2bpu_imem_handshake_done_i && !prediction_hi_rvi) | ifu2bpu_pc_new_req_i;
 assign w_en_lo = w_en & ~ifu2bpu_pc_prev_i[1];
 assign w_en_hi = w_en & ifu2bpu_pc_prev_i[1];
 //-------------------------------------------------------------------------------
@@ -140,7 +160,7 @@ always_ff @(posedge clk, negedge rst_n)
     if(~rst_n) begin
         read_data_ram_lo_saved <= '0;
 `ifdef SCR1_RVC_EXT
-        read_data_ram_lo_saved <= '0;
+        read_data_ram_hi_saved <= '0;
 `endif
     end
     else if(prev_r_en && !(r_en)) begin
@@ -150,40 +170,45 @@ always_ff @(posedge clk, negedge rst_n)
 `endif
     end
 
-assign curr_data_btb_lo = branch_buffer'(prev_r_en ? read_data_ram_lo : read_data_ram_lo_saved);
+assign curr_data_btb_lo = branch_buffer'(prev_r_en 
+                        ? read_data_ram_lo 
+                        : (bpu_state == SCR1_BPU_RVI_HI
+                        ? read_data_ram_hi_saved
+                        : read_data_ram_lo_saved));
 `ifdef SCR1_RVC_EXT
-assign curr_data_btb_hi = branch_buffer'(prev_r_en ? read_data_ram_hi : read_data_ram_hi_saved);
+assign curr_data_btb_hi = branch_buffer'(prev_r_en 
+                        ? read_data_ram_hi 
+                        : (bpu_state == SCR1_BPU_RVI_HI
+                        ? '0
+                        : read_data_ram_hi_saved));
 `endif
 
 always_comb
     begin
-            if((curr_data_btb_lo.tag==curr_pc[`SCR1_XLEN-1:pc_bit_used+2]))
-            begin
-                bpu2ifu_new_pc_lo_o = curr_data_btb_lo.pc;
-                bpu2ifu_prediction_lo_o = prediction_lo;
-            end
-            else
-                begin
-                    bpu2ifu_new_pc_lo_o = '0;
-                    bpu2ifu_prediction_lo_o = 1'b0;
-                end
-            `ifdef SCR1_RVC_EXT
-            if((curr_data_btb_hi.tag==curr_pc[`SCR1_XLEN-1:pc_bit_used+2]))
-            begin
-                bpu2ifu_new_pc_hi_o = curr_data_btb_hi.pc;
-                bpu2ifu_prediction_hi_o = prediction_hi;
-                bpu2ifu_rvi_flag_hi_o = curr_data_btb_hi.rvi_flag;
-            end
-            else
-                begin
-                    bpu2ifu_new_pc_hi_o = '0;
-                    bpu2ifu_prediction_hi_o = 1'b0;
-                    bpu2ifu_rvi_flag_hi_o = 1'b0;
-                end
-            `endif
+        if((curr_data_btb_lo.tag==curr_pc[`SCR1_XLEN-1:pc_bit_used+2])) begin
+            bpu2ifu_new_pc_lo_o = curr_data_btb_lo.pc;
+            bpu2ifu_prediction_lo_o = bpu_state == SCR1_BPU_RVI_HI ? prediction_hi_ff : prediction_lo_ff;
+        end
+        else begin
+            bpu2ifu_new_pc_lo_o = '0;
+            bpu2ifu_prediction_lo_o = 1'b0;
+        end
+`ifdef SCR1_RVC_EXT
+        if((curr_data_btb_hi.tag==curr_pc[`SCR1_XLEN-1:pc_bit_used+2])) begin
+            bpu2ifu_new_pc_hi_o = curr_data_btb_hi.pc;
+            bpu2ifu_prediction_hi_o = prediction_hi_ff && !curr_data_btb_hi.rvi_flag;
+            bpu2ifu_rvi_flag_hi_o = curr_data_btb_hi.rvi_flag;
+        end
+        else begin
+            bpu2ifu_new_pc_hi_o = '0;
+            bpu2ifu_prediction_hi_o = 1'b0;
+            bpu2ifu_rvi_flag_hi_o = 1'b0;
+        end
+`endif
     end
 
-// 2 bit saturation counter
+//Instance 2 bit saturation counter
+//-------------------------------------------------------------------------------
 `ifdef SAT_CNT_2
 genvar i;
 generate
@@ -193,15 +218,67 @@ generate
         end
 endgenerate
 `endif
-
+//Get prediction
+//-------------------------------------------------------------------------------
 always_comb
     begin
         `ifndef SCR1_RVC_EXT
-        prediction_lo = stc2bpu_prediction_o[curr_pc[1+:(pc_bit_used+1)]];
+        prediction_lo_cmb = stc2bpu_prediction_o[ifu2bpu_pc_i[1+:(pc_bit_used+1)]]
+                          && !(ifu2bpu_imem_addr_unaligned_upd_i && ifu2bpu_imem_addr_unaligned_next_i);
         `else
-        prediction_lo = stc2bpu_prediction_o[curr_pc[1+:(pc_bit_used+1)]];
-        prediction_hi = stc2bpu_prediction_o[curr_pc[1+:(pc_bit_used+1)] + 1'b1];
+        prediction_lo_cmb = stc2bpu_prediction_o[ifu2bpu_pc_i[1+:(pc_bit_used+1)]]
+                          && !(ifu2bpu_imem_addr_unaligned_upd_i && ifu2bpu_imem_addr_unaligned_next_i);
+        prediction_hi_cmb = stc2bpu_prediction_o[ifu2bpu_pc_i[1+:(pc_bit_used+1)] + 1'b1];
         `endif
+    end
+//Save prediction
+//-------------------------------------------------------------------------------
+always_ff @(posedge clk, negedge rst_n)
+    if(~rst_n) begin
+        prediction_lo_ff <= '0;
+`ifdef SCR1_RVC_EXT
+        prediction_hi_ff <= '0;
+`endif
+    end
+    else if (r_en) begin
+        prediction_lo_ff <= prediction_lo_cmb;
+`ifdef SCR1_RVC_EXT
+        prediction_hi_ff <= prediction_hi_cmb;
+`endif
+    end
+
+//BPU FSM
+//-------------------------------------------------------------------------------
+assign prediction_hi_rvi = prediction_hi_ff && curr_data_btb_hi.rvi_flag 
+                         && (curr_data_btb_hi.tag==curr_pc[`SCR1_XLEN-1:pc_bit_used+2]);
+
+always_comb begin
+    bpu_state_next = bpu_state;
+    case (bpu_state)
+        SCR1_BPU_NORMAL: begin
+            if (prediction_hi_rvi) begin
+                bpu_state_next = SCR1_BPU_RVI_HI;
+            end
+        end
+        SCR1_BPU_RVI_HI: bpu_state_next = SCR1_BPU_NORMAL;
+    endcase
+end
+
+always_ff @(posedge clk, negedge rst_n) begin
+    if(~rst_n) begin
+        bpu_state <= SCR1_BPU_NORMAL;
+    end
+    else if (ifu2bpu_pc_new_req_i)
+        bpu_state <= SCR1_BPU_NORMAL;
+    else if (ifu2bpu_imem_handshake_done_i) begin
+        bpu_state <= bpu_state_next;
+    end
+end
+
+//Update BPU
+//-------------------------------------------------------------------------------
+always_comb
+    begin
         for(int i = 0; i < DEPTH; i++) begin
             if(i == ifu2bpu_pc_prev_i[1+:(pc_bit_used+1)])
                 begin
